@@ -16,13 +16,7 @@ extern "C" {
 
     #[link_name = "black"]
     //  double K, double sigma, double T, double q /* q=±1 */) -> c_double
-    fn black_ffi(
-        F: c_double,
-        K: c_double,
-        sigma: c_double,
-        T: c_double,
-        q: c_double,
-    ) -> c_double;
+    fn black_ffi(F: c_double, K: c_double, sigma: c_double, T: c_double, q: c_double) -> c_double;
 }
 
 /// This function returns the implied volatility of an option contract using a transformed rational approximation.
@@ -32,6 +26,7 @@ extern "C" {
 /// price, f, k, t, q.
 /// # Returns
 /// f64 of the implied volatility of the option.
+#[inline(always)]
 pub fn implied_volatility_from_a_transformed_rational_guess(
     price: f64,
     f: f64,
@@ -53,6 +48,7 @@ pub fn implied_volatility_from_a_transformed_rational_guess(
 /// f, k, sigma, t, q.
 /// # Returns
 /// f64 of the price of the option.
+#[inline(always)]
 pub fn black(f: f64, k: f64, sigma: f64, t: f64, q: f64) -> f64 {
     let f: c_double = f.into();
     let k: c_double = k.into();
