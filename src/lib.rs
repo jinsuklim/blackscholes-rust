@@ -126,6 +126,8 @@ impl OptionInputs {
     }
 
     pub fn with_price(mut self, p: f64) -> Self {
+        self.price = p;
+
         // "let's be rational" works with the forward and undiscounted option price, so remove the discount
         let rate_inv_discount = (self.r * self.t).exp();
         let p = p * rate_inv_discount;
@@ -146,7 +148,6 @@ impl OptionInputs {
         );
 
         if implied_vol > 0.0 {
-            self.price = p;
             self.with_implied_vol(implied_vol)
         } else {
             self
