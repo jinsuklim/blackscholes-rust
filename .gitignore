@@ -1,3 +1,13 @@
-target/
-build/
+/target
+.idea/
 .vscode/
+log/
+*.swp
+*.swo
+*.pyc
+*.so
+.ipynb_checkpoints
+__cache__
+*.profraw
+
+Cargo.lock

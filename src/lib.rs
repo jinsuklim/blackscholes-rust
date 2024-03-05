@@ -16,7 +16,6 @@
 mod lets_be_rational;
 
 use statrs::distribution::{ContinuousCDF, Normal};
-use std::fmt::{Display, Formatter, Result as fmtResult};
 
 pub const SQRT_2PI: f64 = 2.5066282;
 pub const DAYS_PER_YEAR: f64 = 365.25;
@@ -34,7 +33,7 @@ fn calculate_npdf(x: f64) -> f64 {
 }
 
 /// The inputs to the Black-Scholes-Merton model.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct OptionInputs {
     /// The type of the option (call or put)
     pub is_call: bool,
@@ -57,6 +56,9 @@ pub struct OptionInputs {
     /// Implied vol
     pub implied_vol: f64,
 
+    /// Option price
+    pub price: f64,
+
     /// Cache intermediate results to speed up subsequent calculations.
     d1: f64,
     d2: f64,
@@ -77,12 +79,77 @@ impl OptionInputs {
             q,
             t,
             implied_vol: f64::NAN,
+            price: f64::NAN,
             d1: f64::NAN,
             d2: f64::NAN,
             nd1: f64::NAN,
             nd2: f64::NAN,
             nprimed1: f64::NAN,
             nprimed2: f64::NAN,
+        }
+    }
+
+    pub fn with_implied_vol(mut self, implied_vol: f64) -> Self {
+        self.implied_vol = implied_vol;
+
+        // Calculate d1, d2
+        let numerator =
+            (self.s / self.k).ln() + (self.r - self.q + implied_vol.powi(2) / 2.0) * self.t;
+
+        let denominator = implied_vol * self.t.sqrt();
+        self.d1 = numerator / denominator;
+        self.d2 = self.d1 - denominator;
+
+        // Then nd1, nd2
+        let n = Normal::new(0.0, 1.0).unwrap();
+        self.nd1 = n.cdf(self.sign() * self.d1);
+        self.nd2 = n.cdf(self.sign() * self.d2);
+
+        // Then nprimed1, nprimed2
+        self.nprimed1 = calculate_npdf(self.d1);
+        self.nprimed2 = calculate_npdf(self.d2);
+
+        if !self.price.is_finite() {
+            // let's be rational wants the forward price, not the spot price.
+            let forward = self.s * ((self.r - self.q) * self.t).exp();
+
+            // convert the option type into \theta
+            // price using `black`
+            let undiscounted_price =
+                lets_be_rational::black(forward, self.k, implied_vol, self.t, self.sign());
+
+            // discount the price
+            self.price = undiscounted_price * self.rate_discount();
+        }
+
+        self
+    }
+
+    pub fn with_price(mut self, p: f64) -> Self {
+        // "let's be rational" works with the forward and undiscounted option price, so remove the discount
+        let rate_inv_discount = (self.r * self.t).exp();
+        let p = p * rate_inv_discount;
+
+        // compute the forward price
+        let f = self.s * rate_inv_discount;
+
+        // The Black-Scholes-Merton formula takes into account dividend yield by setting S = S * e^{-qt}, do this here with the forward
+        let f = f * self.dividend_discount();
+
+        // convert the option type into \theta
+        let implied_vol = lets_be_rational::implied_volatility_from_a_transformed_rational_guess(
+            p,
+            f,
+            self.k,
+            self.t,
+            self.sign(),
+        );
+
+        if implied_vol > 0.0 {
+            self.price = p;
+            self.with_implied_vol(implied_vol)
+        } else {
+            self
         }
     }
 
@@ -105,74 +172,12 @@ impl OptionInputs {
         (-self.r * self.t).exp()
     }
 
-    pub fn prepare_given_implied_vol(&mut self, implied_vol: f64) {
-        debug_assert!(implied_vol.is_finite());
-        self.implied_vol = implied_vol;
-
-        // Calculate d1, d2
-        let numerator =
-            (self.s / self.k).ln() + (self.r - self.q + implied_vol.powi(2) / 2.0) * self.t;
-
-        let denominator = implied_vol * self.t.sqrt();
-        self.d1 = numerator / denominator;
-        self.d2 = self.d1 - denominator;
-
-        // Then nd1, nd2
-        let n = Normal::new(0.0, 1.0).unwrap();
-        self.nd1 = n.cdf(self.sign() * self.d1);
-        self.nd2 = n.cdf(self.sign() * self.d2);
-
-        // Then nprimed1, nprimed2
-        self.nprimed1 = calculate_npdf(self.d1);
-        self.nprimed2 = calculate_npdf(self.d2);
+    pub fn implied_vol(&self) -> f64 {
+        self.implied_vol
     }
 
-    pub fn prepare_given_price(&mut self, p: f64) {
-        self.prepare_given_implied_vol(self.calculate_implied_vol(p));
-    }
-
-    pub fn calculate_implied_vol(&self, p: f64) -> f64 {
-        debug_assert!(p.is_finite());
-
-        // "let's be rational" works with the forward and undiscounted option price, so remove the discount
-        let rate_inv_discount = (self.r * self.t).exp();
-        let p = p * rate_inv_discount;
-
-        // compute the forward price
-        let f = self.s * rate_inv_discount;
-
-        // The Black-Scholes-Merton formula takes into account dividend yield by setting S = S * e^{-qt}, do this here with the forward
-        let f = f * self.dividend_discount();
-
-        // convert the option type into \theta
-        let implied_vol = lets_be_rational::implied_volatility_from_a_transformed_rational_guess(
-            p,
-            f,
-            self.k,
-            self.t,
-            self.sign(),
-        );
-
-        if implied_vol > 0.0 {
-            implied_vol
-        } else {
-            f64::NAN
-        }
-    }
-
-    pub fn calculate_option_price(&self, implied_vol: f64) -> f64 {
-        debug_assert!(implied_vol.is_finite());
-
-        // let's be rational wants the forward price, not the spot price.
-        let forward = self.s * ((self.r - self.q) * self.t).exp();
-
-        // convert the option type into \theta
-        // price using `black`
-        let undiscounted_price =
-            lets_be_rational::black(forward, self.k, implied_vol, self.t, self.sign());
-
-        // discount the price
-        undiscounted_price * self.rate_discount()
+    pub fn price(&self) -> f64 {
+        self.price
     }
 
     pub fn delta(&self) -> f64 {
@@ -204,9 +209,8 @@ impl OptionInputs {
         -self.sign() * self.s * self.t * self.dividend_discount() * self.nd1
     }
 
-    pub fn lambda(&self, p: Option<f64>) -> f64 {
-        let p = p.unwrap_or(self.calculate_option_price(self.implied_vol));
-        self.delta() * self.s / p
+    pub fn lambda(&self) -> f64 {
+        self.delta() * self.s / self.price
     }
 
     pub fn vanna(&self) -> f64 {
@@ -267,21 +271,5 @@ impl OptionInputs {
 
     pub fn dual_gamma(&self) -> f64 {
         self.dividend_discount() * (self.nprimed2 / (self.k * self.implied_vol * self.t.sqrt()))
-    }
-}
-
-impl Display for OptionInputs {
-    fn fmt(&self, f: &mut Formatter) -> fmtResult {
-        writeln!(
-            f,
-            "Option type: {}",
-            if self.is_call { "Call" } else { "Put" }
-        )?;
-        writeln!(f, "Stock price: {:.2}", self.s)?;
-        writeln!(f, "Strike price: {:.2}", self.k)?;
-        writeln!(f, "Risk-free rate: {:.4}", self.r)?;
-        writeln!(f, "Dividend yield: {:.4}", self.q)?;
-        writeln!(f, "Time to maturity: {:.4}", self.t)?;
-        Ok(())
     }
 }
